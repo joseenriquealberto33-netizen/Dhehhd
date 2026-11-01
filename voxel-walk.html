@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Voxel World — Walk</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #87CEEB; height: 100%; touch-action: none;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  #canvas-wrap { width: 100vw; height: 100vh; position: relative; }
+  canvas { display: block; }
+
+  #title {
+    position: absolute; top: 12px; left: 12px;
+    color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    font-size: 14px; font-weight: 600; background: rgba(0,0,0,0.28);
+    padding: 6px 12px; border-radius: 8px; pointer-events: none;
+  }
+
+  #reset-btn {
+    position: absolute; top: 12px; right: 12px; pointer-events: auto;
+    background: rgba(0,0,0,0.45); color: #fff; border: none;
+    padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  }
+
+  #palette {
+    position: absolute; top: 54px; left: 0; right: 0;
+    display: flex; justify-content: center; gap: 8px; pointer-events: none;
+  }
+  .block-btn {
+    pointer-events: auto;
+    width: 34px; height: 34px; border-radius: 8px;
+    border: 2px solid rgba(255,255,255,0.85);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+  }
+  .block-btn.active { border-color: #fff; box-shadow: 0 0 0 3px rgba(255,255,255,0.6); }
+
+  #crosshair {
+    position: absolute; top: 50%; left: 50%; width: 8px; height: 8px;
+    margin: -4px 0 0 -4px; border-radius: 50%;
+    background: rgba(255,255,255,0.9); box-shadow: 0 0 0 1.5px rgba(0,0,0,0.5);
+    pointer-events: none;
+  }
+
+  #dpad {
+    position: absolute; left: 20px; bottom: 20px; width: 168px; height: 168px;
+    display: grid; grid-template-columns: 56px 56px 56px; grid-template-rows: 56px 56px 56px;
+    gap: 4px; pointer-events: auto;
+  }
+  .dpad-btn {
+    border: none; border-radius: 12px; background: rgba(0,0,0,0.4); color: #fff;
+    font-size: 22px; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3); user-select: none; -webkit-user-select: none;
+  }
+  .dpad-btn.pressed { background: rgba(255,255,255,0.55); }
+  #dpad-up { grid-column: 2; grid-row: 1; }
+  #dpad-left { grid-column: 1; grid-row: 2; }
+  #dpad-right { grid-column: 3; grid-row: 2; }
+  #dpad-down { grid-column: 2; grid-row: 3; }
+
+  #action-buttons {
+    position: absolute; right: 20px; bottom: 26px;
+    display: flex; flex-direction: column; align-items: center; gap: 10px; pointer-events: auto;
+  }
+  .action-btn {
+    width: 58px; height: 58px; border-radius: 50%; border: none;
+    color: #fff; font-size: 20px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+  }
+  #break-btn { background: rgba(200,60,50,0.75); }
+  #place-btn { background: rgba(60,150,80,0.8); }
+  #jump-btn { background: rgba(0,0,0,0.5); }
+
+  #hint {
+    position: absolute; bottom: 96px; left: 0; right: 0; text-align: center;
+    color: #fff; font-size: 11px; text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+    pointer-events: none; opacity: 0.85;
+  }
+</style>
+</head>
+<body>
+<div id="canvas-wrap">
+  <div id="title">Voxel World</div>
+  <button id="reset-btn">Reset</button>
+  <div id="palette"></div>
+  <div id="crosshair"></div>
+  <div id="hint">D-pad: move &middot; drag right side: look &middot; tap ⛏ / ⬛ to break/place</div>
+
+  <div id="dpad">
+    <button class="dpad-btn" id="dpad-up">▲</button>
+    <button class="dpad-btn" id="dpad-left">◀</button>
+    <button class="dpad-btn" id="dpad-right">▶</button>
+    <button class="dpad-btn" id="dpad-down">▼</button>
+  </div>
+
+  <div id="action-buttons">
+    <button class="action-btn" id="jump-btn">⤒</button>
+    <button class="action-btn" id="break-btn">⛏</button>
+    <button class="action-btn" id="place-btn">⬛</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function () {
+  const wrap = document.getElementById('canvas-wrap');
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x8fd0ef);
+  scene.fog = new THREE.Fog(0x8fd0ef, 20, 55);
+
+  const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 1000);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  wrap.appendChild(renderer.domElement);
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x6b8e4e, 0.9));
+  const sun = new THREE.DirectionalLight(0xfff4d6, 0.9);
+  sun.position.set(20, 30, 10);
+  scene.add(sun);
+  const fillLight = new THREE.DirectionalLight(0xbcd8ff, 0.3);
+  fillLight.position.set(-15, 10, -10);
+  scene.add(fillLight);
+
+  const BLOCK_TYPES = {
+    grass: { top: 0x6fbf4f, side: 0x8a6b3d, bottom: 0x6b4a2c },
+    dirt:  { top: 0x8a6b3d, side: 0x8a6b3d, bottom: 0x6b4a2c },
+    stone: { top: 0x9a9a9a, side: 0x8c8c8c, bottom: 0x7d7d7d },
+    wood:  { top: 0xc9974e, side: 0xa9773a, bottom: 0xa9773a },
+    leaves:{ top: 0x4c9a3a, side: 0x4c9a3a, bottom: 0x4c9a3a },
+    sand:  { top: 0xe8d79c, side: 0xe0cc8c, bottom: 0xd6c07c },
+  };
+  const ORDER = ['grass', 'dirt', 'stone', 'wood', 'leaves', 'sand'];
+  let currentType = 'grass';
+
+  function makeMats(spec) {
+    const mk = (hex) => new THREE.MeshLambertMaterial({ color: hex });
+    return [mk(spec.side), mk(spec.side), mk(spec.top), mk(spec.bottom), mk(spec.side), mk(spec.side)];
+  }
+  const matCache = {};
+  ORDER.forEach(t => matCache[t] = makeMats(BLOCK_TYPES[t]));
+
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  const edgesGeo = new THREE.EdgesGeometry(geo);
+
+  const SIZE = 14;
+  const world = new Map();
+  const key = (x, y, z) => x + ',' + y + ',' + z;
+  const heightMap = new Map();
+
+  function addBlock(x, y, z, type, skipIfExists) {
+    const k = key(x, y, z);
+    if (skipIfExists && world.has(k)) return;
+    if (world.has(k)) removeBlock(x, y, z, true);
+    const mesh = new THREE.Mesh(geo, matCache[type]);
+    mesh.position.set(x, y, z);
+    const edges = new THREE.LineSegments(edgesGeo, new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.12 }));
+    mesh.add(edges);
+    scene.add(mesh);
+    world.set(k, { mesh, type, x, y, z });
+    const hk = x + ',' + z;
+    if (!heightMap.has(hk) || y > heightMap.get(hk)) heightMap.set(hk, y);
+  }
+
+  function recomputeColumnHeight(x, z) {
+    let top = -999;
+    world.forEach(b => { if (b.x === x && b.z === z && b.y > top) top = b.y; });
+    const hk = x + ',' + z;
+    if (top === -999) heightMap.delete(hk); else heightMap.set(hk, top);
+  }
+
+  function removeBlock(x, y, z, skipHeightRecalc) {
+    const k = key(x, y, z);
+    const entry = world.get(k);
+    if (!entry) return;
+    scene.remove(entry.mesh);
+    world.delete(k);
+    if (!skipHeightRecalc) recomputeColumnHeight(x, z);
+  }
+
+  function isSolid(x, y, z) {
+    return world.has(key(Math.round(x), Math.round(y), Math.round(z)));
+  }
+
+  function groundBelow(x, z, fromY) {
+    const bx = Math.round(x), bz = Math.round(z);
+    let by = Math.floor(fromY) + 1;
+    for (let i = 0; i < 40; i++) {
+      if (isSolid(bx, by, bz)) return by + 0.5;
+      by -= 1;
+    }
+    return -2.5;
+  }
+
+  function simpleNoise(x, z) {
+    return Math.round(1.6 * Math.sin(x * 0.35) + 1.2 * Math.cos(z * 0.3) + 0.6 * Math.sin((x + z) * 0.2));
+  }
+
+  function buildWorld() {
+    world.forEach(e => scene.remove(e.mesh));
+    world.clear();
+    heightMap.clear();
+    for (let x = -SIZE; x <= SIZE; x++) {
+      for (let z = -SIZE; z <= SIZE; z++) {
+        const h = simpleNoise(x, z);
+        for (let y = -2; y <= h; y++) {
+          let type = 'stone';
+          if (y === h) type = (h <= -1) ? 'sand' : 'grass';
+          else if (y > h - 2) type = 'dirt';
+          addBlock(x, y, z, type);
+        }
+      }
+    }
+    const trees = [[-4, 3], [5, -2], [2, 6], [-6, -5], [7, 5]];
+    trees.forEach(([tx, tz]) => {
+      const h = simpleNoise(tx, tz);
+      for (let i = 1; i <= 3; i++) addBlock(tx, h + i, tz, 'wood');
+      for (let dx = -1; dx <= 1; dx++)
+        for (let dz = -1; dz <= 1; dz++)
+          for (let dy = 3; dy <= 4; dy++)
+            if (!(dx === 0 && dz === 0 && dy === 3)) addBlock(tx + dx, h + dy, tz + dz, 'leaves', true);
+      addBlock(tx, h + 5, tz, 'leaves', true);
+    });
+
+    const sh = simpleNoise(0, 8);
+    player.x = 0; player.z = 8; player.y = sh + 3;
+    player.vy = 0;
+  }
+
+  const EYE_HEIGHT = 1.6;
+  const PLAYER_RADIUS = 0.32;
+  const GRAVITY = -22;
+  const JUMP_SPEED = 7.5;
+  const MOVE_SPEED = 4.5;
+
+  const player = { x: 0, y: 6, z: 8, vy: 0, yaw: Math.PI, pitch: -0.12, onGround: false };
+
+  function tryMove(nx, nz) {
+    const feetY = player.y + 0.1;
+    const headY = player.y + 1.3;
+    if (nx !== player.x) {
+      const checkX = nx + (nx > player.x ? PLAYER_RADIUS : -PLAYER_RADIUS);
+      if (!isSolid(checkX, feetY, player.z) && !isSolid(checkX, headY, player.z)) {
+        player.x = nx;
+      }
+    }
+    if (nz !== player.z) {
+      const checkZ = nz + (nz > player.z ? PLAYER_RADIUS : -PLAYER_RADIUS);
+      if (!isSolid(player.x, feetY, checkZ) && !isSolid(player.x, headY, checkZ)) {
+        player.z = nz;
+      }
+    }
+  }
+
+  function updatePlayer(dt, moveX, moveZ, jumpPressed) {
+    if (moveX || moveZ) {
+      const sinY = Math.sin(player.yaw), cosY = Math.cos(player.yaw);
+      const fx = -sinY, fz = -cosY;
+      const rx = cosY, rz = -sinY;
+      const dx = (fx * -moveZ + rx * moveX);
+      const dz = (fz * -moveZ + rz * moveX);
+      const len = Math.hypot(dx, dz) || 1;
+      const nx = player.x + (dx / len) * MOVE_SPEED * dt;
+      const nz = player.z + (dz / len) * MOVE_SPEED * dt;
+      tryMove(nx, nz);
+    }
+
+    player.vy += GRAVITY * dt;
+    let ny = player.y + player.vy * dt;
+    const ground = groundBelow(player.x, player.z, player.y);
+    if (ny <= ground) {
+      ny = ground;
+      player.vy = 0;
+      player.onGround = true;
+    } else {
+      player.onGround = false;
+    }
+    if (isSolid(player.x, ny + 1.7, player.z) && player.vy > 0) {
+      player.vy = 0;
+    } else {
+      player.y = ny;
+    }
+
+    if (jumpPressed && player.onGround) {
+      player.vy = JUMP_SPEED;
+    }
+
+    camera.position.set(player.x, player.y + EYE_HEIGHT, player.z);
+    const lookDir = new THREE.Vector3(
+      -Math.sin(player.yaw) * Math.cos(player.pitch),
+      Math.sin(player.pitch),
+      -Math.cos(player.yaw) * Math.cos(player.pitch)
+    );
+    camera.lookAt(camera.position.clone().add(lookDir));
+  }
+
+  const dpadState = { up: false, down: false, left: false, right: false };
+  function wireDpadBtn(id, dir) {
+    const el = document.getElementById(id);
+    const press = (e) => { e.preventDefault(); dpadState[dir] = true; el.classList.add('pressed'); };
+    const release = (e) => { e.preventDefault(); dpadState[dir] = false; el.classList.remove('pressed'); };
+    el.addEventListener('touchstart', press, { passive: false });
+    el.addEventListener('touchend', release, { passive: false });
+    el.addEventListener('touchcancel', release, { passive: false });
+    el.addEventListener('mousedown', press);
+    el.addEventListener('mouseup', release);
+    el.addEventListener('mouseleave', release);
+  }
+  wireDpadBtn('dpad-up', 'up');
+  wireDpadBtn('dpad-down', 'down');
+  wireDpadBtn('dpad-left', 'left');
+  wireDpadBtn('dpad-right', 'right');
+
+  const dom = renderer.domElement;
+  let lookPointerId = null, lookLast = { x: 0, y: 0 };
+  const LOOK_SENS = 0.008;
+
+  function isUiElement(target) {
+    return target && target.closest && target.closest('button, #dpad, #palette');
+  }
+
+  dom.addEventListener('touchstart', (e) => {
+    for (const t of e.changedTouches) {
+      const el = document.elementFromPoint(t.clientX, t.clientY);
+      if (isUiElement(el)) continue;
+      if (lookPointerId === null) {
+        lookPointerId = t.identifier;
+        lookLast = { x: t.clientX, y: t.clientY };
+      }
+    }
+  }, { passive: false });
+
+  dom.addEventListener('touchmove', (e) => {
+    for (const t of e.changedTouches) {
+      if (t.identifier !== lookPointerId) continue;
+      const dx = t.clientX - lookLast.x, dy = t.clientY - lookLast.y;
+      player.yaw -= dx * LOOK_SENS;
+      player.pitch = Math.max(-1.3, Math.min(1.3, player.pitch - dy * LOOK_SENS));
+      lookLast = { x: t.clientX, y: t.clientY };
+    }
+  }, { passive: false });
+
+  function lookEnd(e) {
+    for (const t of e.changedTouches) {
+      if (t.identifier === lookPointerId) lookPointerId = null;
+    }
+  }
+  dom.addEventListener('touchend', lookEnd, { passive: false });
+  dom.addEventListener('touchcancel', lookEnd, { passive: false });
+
+  let mouseDown = false, mouseLast = { x: 0, y: 0 };
+  dom.addEventListener('mousedown', (e) => { mouseDown = true; mouseLast = { x: e.clientX, y: e.clientY }; });
+  window.addEventListener('mouseup', () => mouseDown = false);
+  window.addEventListener('mousemove', (e) => {
+    if (!mouseDown) return;
+    const dx = e.clientX - mouseLast.x, dy = e.clientY - mouseLast.y;
+    player.yaw -= dx * LOOK_SENS;
+    player.pitch = Math.max(-1.3, Math.min(1.3, player.pitch - dy * LOOK_SENS));
+    mouseLast = { x: e.clientX, y: e.clientY };
+  });
+  const keys = {};
+  window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
+  window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+
+  let jumpPressed = false;
+  const jumpBtn = document.getElementById('jump-btn');
+  jumpBtn.addEventListener('touchstart', (e) => { e.preventDefault(); jumpPressed = true; }, { passive: false });
+  jumpBtn.addEventListener('touchend', (e) => { e.preventDefault(); jumpPressed = false; }, { passive: false });
+  jumpBtn.addEventListener('mousedown', () => jumpPressed = true);
+  jumpBtn.addEventListener('mouseup', () => jumpPressed = false);
+
+  function targetedBlock() {
+    const dir = new THREE.Vector3(
+      -Math.sin(player.yaw) * Math.cos(player.pitch),
+      Math.sin(player.pitch),
+      -Math.cos(player.yaw) * Math.cos(player.pitch)
+    );
+    const origin = camera.position.clone();
+    const step = 0.08, maxDist = 6;
+    let prev = null;
+    for (let d = 0; d < maxDist; d += step) {
+      const p = origin.clone().addScaledVector(dir, d);
+      const bx = Math.round(p.x), by = Math.round(p.y), bz = Math.round(p.z);
+      if (isSolid(bx, by, bz)) {
+        return { hit: { x: bx, y: by, z: bz }, before: prev };
+      }
+      prev = { x: bx, y: by, z: bz };
+    }
+    return null;
+  }
+
+  document.getElementById('break-btn').addEventListener('click', () => {
+    const t = targetedBlock();
+    if (t) removeBlock(t.hit.x, t.hit.y, t.hit.z);
+  });
+  document.getElementById('place-btn').addEventListener('click', () => {
+    const t = targetedBlock();
+    if (t && t.before) {
+      const closeToPlayer = Math.abs(t.before.x - player.x) < 0.6 && Math.abs(t.before.z - player.z) < 0.6 &&
+        Math.abs(t.before.y - (player.y + 0.5)) < 0.6;
+      if (!closeToPlayer) addBlock(t.before.x, t.before.y, t.before.z, currentType, true);
+    }
+  });
+
+  const palette = document.getElementById('palette');
+  ORDER.forEach(type => {
+    const btn = document.createElement('button');
+    btn.className = 'block-btn' + (type === currentType ? ' active' : '');
+    btn.style.background = '#' + BLOCK_TYPES[type].top.toString(16).padStart(6, '0');
+    btn.addEventListener('click', () => {
+      currentType = type;
+      document.querySelectorAll('.block-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+    palette.appendChild(btn);
+  });
+
+  document.getElementById('reset-btn').addEventListener('click', buildWorld);
+
+  buildWorld();
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  let lastT = performance.now();
+  function animate() {
+    requestAnimationFrame(animate);
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - lastT) / 1000);
+    lastT = now;
+
+    let mx = (dpadState.right ? 1 : 0) + (dpadState.left ? -1 : 0);
+    let mz = (dpadState.down ? 1 : 0) + (dpadState.up ? -1 : 0);
+    if (keys['w']) mz = -1;
+    if (keys['s']) mz = 1;
+    if (keys['a']) mx = -1;
+    if (keys['d']) mx = 1;
+    const jp = jumpPressed || keys[' '];
+
+    updatePlayer(dt, mx, mz, jp);
+    renderer.render(scene, camera);
+  }
+  animate();
+})();
+</script>
+</body>
+</html>

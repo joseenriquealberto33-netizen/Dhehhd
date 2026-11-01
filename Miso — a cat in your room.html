@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Miso — a cat in your room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,500;1,400&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+:root{--ink:#f6e9d8;--dim:#d3bfc3;--pink:#ff8fb1;--night:#1b1220;color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{height:100%;margin:0;background:var(--night);color:var(--ink);font-family:Fraunces,Georgia,serif;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+#cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;display:none}
+#c{position:fixed;inset:0;width:100%;height:100%}
+#hud{display:none;position:fixed;top:calc(env(safe-area-inset-top,0px) + 16px);left:20px;pointer-events:none;text-shadow:0 1px 8px rgba(0,0,0,.65)}
+#name{font-size:30px;font-weight:500}
+#mood{font-style:italic;font-size:16px;color:var(--dim);margin-top:2px}
+#meter{margin-top:10px;width:120px;height:4px;border-radius:2px;background:rgba(255,255,255,.2);overflow:hidden}
+#meter i{display:block;height:100%;width:0;background:linear-gradient(90deg,#ffb3c8,#ff6f9c)}
+#bar{display:none;position:fixed;left:0;right:0;bottom:calc(env(safe-area-inset-bottom,0px) + 18px);gap:10px;justify-content:center;flex-wrap:wrap;padding:0 12px}
+button{font:inherit;font-size:15px;color:var(--ink);background:rgba(27,18,32,.6);border:1px solid rgba(255,255,255,.26);border-radius:22px;padding:10px 18px;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+button:focus-visible{outline:2px solid var(--pink);outline-offset:2px}
+#hint{position:fixed;left:16px;right:16px;bottom:calc(env(safe-area-inset-bottom,0px) + 130px);text-align:center;font-style:italic;color:var(--ink);transition:opacity 1s;pointer-events:none;text-shadow:0 1px 8px rgba(0,0,0,.8)}
+#start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:28px;background:radial-gradient(ellipse at 50% 35%,#4a2f50,#1b1220 70%)}
+#arrow{display:none;position:fixed;width:46px;height:46px;margin:-23px 0 0 -23px;border-radius:50%;background:#ff8fb1;color:#2a1424;font-size:22px;line-height:46px;text-align:center;pointer-events:none;box-shadow:0 0 18px rgba(255,111,156,.8)}
+#hand{display:none;position:fixed;width:56px;height:56px;margin:-28px 0 0 -28px;border-radius:50%;border:3px solid #ff8fb1;box-shadow:0 0 16px #ff8fb1;pointer-events:none}
+#mvBtn{background:#ff8fb1;color:#2a1424;font-size:18px;padding:12px 24px;border-color:transparent}
+#err{display:none;position:fixed;top:0;left:0;right:0;z-index:9;padding:calc(env(safe-area-inset-top,0px) + 8px) 12px 8px;background:#7a1f2b;color:#fff;font:13px/1.3 system-ui,sans-serif}
+#start h1{font-size:56px;font-weight:500;margin:0 0 6px}
+#start p{font-style:italic;color:var(--dim);margin:0 0 28px;font-size:18px;max-width:300px;line-height:1.4}
+#start button{font-size:18px;padding:14px 26px;background:#ff8fb1;color:#2a1424;border-color:transparent}
+#start small{margin-top:18px;color:var(--dim);max-width:290px;line-height:1.4}
+</style></head><body>
+<video id="cam" playsinline muted></video><canvas id="c"></canvas>
+<div id="hud"><div id="name">Miso</div><div id="mood">Watching you</div><div id="meter"><i id="mf"></i></div></div>
+<div id="hint"></div><div id="arrow">➤</div><div id="hand"></div><div id="err"></div>
+<div id="bar"><button id="retryBtn" style="display:none">Try camera again</button><button id="photoBtn" style="display:none">Photo of my room</button><button id="mvBtn">Call Miso</button><button id="sndBtn">Sound on</button></div><input id="photo" type="file" accept="image/*" capture="environment" hidden>
+<div id="start"><h1>Miso</h1><p>A fluffy cat who roams your room. Hold your phone up, find her, and wave your hand over her to pet her.</p><button id="go" disabled>Loading Miso…</button><button id="xrGo" style="display:none;margin-top:12px">Walk-around AR (Android)</button><small>Allow the camera and motion when asked. Miso appears in your room and wanders around you.</small></div>
+<script>
+(()=>{
+const showErr=m=>{const b=document.getElementById('err');b.style.display='block';b.textContent='Something broke: '+m};
+addEventListener('error',e=>showErr(e.message||'unknown error'));
+addEventListener('unhandledrejection',e=>showErr((e.reason&&e.reason.message)||String(e.reason)));
+const $=i=>document.getElementById(i),cv=$('c'),vid=$('cam');
+const rnd=Math.random,cl=(v,a,b)=>Math.max(a,Math.min(b,v)),DEG=Math.PI/180;
+const R=new THREE.WebGLRenderer({canvas:cv,alpha:true,antialias:true});
+R.setClearColor(0x000000,0);R.outputEncoding=THREE.sRGBEncoding;
+const scene=new THREE.Scene(),cam=new THREE.PerspectiveCamera(62,1,.05,50);cam.position.set(0,1.3,0);
+scene.add(new THREE.HemisphereLight(0xfff1dc,0x3a2a40,1.15));
+const dl=new THREE.DirectionalLight(0xffe2b8,.9);dl.position.set(1,3,2);scene.add(dl);
+let W,H;
+function rs(){W=innerWidth;H=innerHeight;R.setPixelRatio(Math.min(devicePixelRatio||1,2));R.setSize(W,H,false);cam.aspect=W/H;cam.updateProjectionMatrix()}
+addEventListener('resize',rs);rs();
+
+/* ---------- fur textures ---------- */
+const K=69.115;
+function furTex(seed,fur){
+  const c=document.createElement('canvas');c.width=1024;c.height=512;const g=c.getContext('2d');
+  let s=seed;const r=()=>(s=(s*16807)%2147483647)/2147483647;
+  const col=(u,v)=>{const st=Math.sin(u*K+Math.sin(v*8+seed)*2.6)>.3,b=st?[130,70,32]:[222,148,82],f=.88+r()*.24;
+    return 'rgb('+(b[0]*f|0)+','+(b[1]*f|0)+','+(b[2]*f|0)+')'};
+  if(!fur){g.fillStyle='#b8733a';g.fillRect(0,0,1024,512)}
+  const n=fur?18000:6000,rad=fur?1.7:7;
+  for(let i=0;i<n;i++){const x=r()*1024,y=r()*512;
+    g.globalAlpha=fur?.35+r()*.65:1;g.fillStyle=col(x/1024,y/512);g.beginPath();g.arc(x,y,rad,0,6.283);g.fill()}
+  const t=new THREE.CanvasTexture(c);t.encoding=THREE.sRGBEncoding;t.anisotropy=4;return t;
+}
+const sph=new THREE.SphereGeometry(1,48,32);
+function furPart(sx,sy,sz,n,seed){
+  const grp=new THREE.Group(),base=new THREE.Mesh(sph,new THREE.MeshLambertMaterial({map:furTex(seed,false)}));
+  grp.add(base);const ft=furTex(seed+7,true);
+  for(let i=1;i<=n;i++){
+    const m=new THREE.MeshLambertMaterial({map:ft,alphaTest:i/n*.85,color:new THREE.Color().setScalar(.5+.5*i/n)});
+    const me=new THREE.Mesh(sph,m);me.scale.setScalar(1+i*.013);grp.add(me);
+  }
+  grp.scale.set(sx,sy,sz);return{grp,base};
+}
+const lam=c=>new THREE.MeshLambertMaterial({color:c});
+
+/* ---------- the cat ---------- */
+const root=new THREE.Group(),face=new THREE.Group(),inner=new THREE.Group();
+root.add(face);face.add(inner);root.visible=false;scene.add(root);
+// soft contact shadow
+{const c=document.createElement('canvas');c.width=c.height=128;const g=c.getContext('2d'),gr=g.createRadialGradient(64,64,4,64,64,64);
+  gr.addColorStop(0,'rgba(0,0,0,.55)');gr.addColorStop(1,'rgba(0,0,0,0)');g.fillStyle=gr;g.fillRect(0,0,128,128);
+  const sh=new THREE.Mesh(new THREE.PlaneGeometry(.75,.75),new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(c),transparent:true,depthWrite:false}));
+  sh.rotation.x=-Math.PI/2;sh.position.y=.003;root.add(sh)}
+const B=furPart(.15,.17,.19,10,11);B.grp.position.set(0,.17,-.02);inner.add(B.grp);
+const head=new THREE.Group();head.position.set(0,.37,.08);inner.add(head);
+const Hd=furPart(.115,.1,.1,8,23);head.add(Hd.grp);
+const ginger=lam('#c27c3e'),pink=lam('#e9a0a8'),cream=lam('#ecd4b0');
+const ears=[1,-1].map(sd=>{
+  const e=new THREE.Mesh(new THREE.ConeGeometry(.042,.08,24),ginger);e.position.set(sd*.07,.125,-.01);e.userData.sd=sd;
+  const i=new THREE.Mesh(new THREE.ConeGeometry(.027,.06,24),pink);i.position.set(0,-.006,.014);e.add(i);head.add(e);return e});
+const eyes=[1,-1].map(sd=>{
+  const g=new THREE.Group();g.position.set(sd*.047,.012,.1);
+  const ball=new THREE.Mesh(new THREE.SphereGeometry(.022,24,16),new THREE.MeshStandardMaterial({color:'#e8a62a',emissive:'#5a3000',roughness:.25}));ball.scale.z=.8;
+  const pup=new THREE.Mesh(new THREE.SphereGeometry(.012,16,12),new THREE.MeshBasicMaterial({color:'#100808'}));pup.position.z=.013;pup.scale.set(.7,1.5,.4);
+  const hl=new THREE.Mesh(new THREE.SphereGeometry(.004,8,8),new THREE.MeshBasicMaterial({color:'#fff'}));hl.position.set(-.007,.009,.02);
+  g.add(ball,pup,hl);head.add(g);return{g,pup}});
+const mz=new THREE.Mesh(sph,cream);mz.scale.set(.04,.026,.03);mz.position.set(0,-.028,.1);head.add(mz);
+const nose=new THREE.Mesh(sph,new THREE.MeshLambertMaterial({color:'#e8909c'}));nose.scale.set(.011,.008,.008);nose.position.set(0,-.012,.128);head.add(nose);
+const wm=new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:.7});
+for(const sd of[1,-1])for(let i=0;i<3;i++){
+  const gm=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(sd*.03,-.02-i*.004,.12),new THREE.Vector3(sd*.1,-.015-i*.014,.115),new THREE.Vector3(sd*.15,-.03-i*.022,.09)]);
+  head.add(new THREE.Line(gm,wm));}
+for(const sd of[1,-1]){const p=new THREE.Mesh(sph,cream);p.scale.set(.04,.035,.065);p.position.set(sd*.05,.035,.14);inner.add(p)}
+const tail=new THREE.Group();tail.position.set(.09,.07,-.16);tail.rotation.x=-1.25;inner.add(tail);
+const segs=[];let par=tail;
+for(let i=0;i<7;i++){const piv=new THREE.Group();if(i)piv.position.y=.06;
+  const m=new THREE.Mesh(new THREE.CylinderGeometry(.02-i*.0015,.022-i*.0015,.066,12),i>4?lam('#7a4a28'):ginger);m.position.y=.03;piv.add(m);par.add(piv);segs.push(piv);par=piv}
+const bodyBase=B.base,headBase=Hd.base;
+
+/* ---------- hearts ---------- */
+const hc=document.createElement('canvas');hc.width=hc.height=64;
+{const g=hc.getContext('2d');g.shadowColor='#ff4f8a';g.shadowBlur=8;g.fillStyle='#ff8fb1';g.translate(32,34);g.scale(16,16);
+  g.beginPath();g.moveTo(0,.9);g.bezierCurveTo(-1.7,-.2,-1.1,-1.5,0,-.6);g.bezierCurveTo(1.1,-1.5,1.7,-.2,0,.9);g.fill()}
+const hTex=new THREE.CanvasTexture(hc),hearts=[];
+
+/* ---------- audio ---------- */
+let ac,pg,snd=1;
+function audio(){
+  if(ac){ac.resume();return}
+  try{ac=new(window.AudioContext||window.webkitAudioContext)();
+    const n=ac.sampleRate*2|0,b=ac.createBuffer(1,n,ac.sampleRate),d=b.getChannelData(0);for(let i=0;i<n;i++)d[i]=rnd()*2-1;
+    const src=ac.createBufferSource();src.buffer=b;src.loop=true;
+    const lp=ac.createBiquadFilter();lp.type='lowpass';lp.frequency.value=170;
+    const m=ac.createGain();m.gain.value=.5;const lfo=ac.createOscillator();lfo.frequency.value=25;
+    const lg=ac.createGain();lg.gain.value=.5;lfo.connect(lg);lg.connect(m.gain);
+    pg=ac.createGain();pg.gain.value=0;src.connect(lp);lp.connect(m);m.connect(pg);pg.connect(ac.destination);src.start();lfo.start();
+  }catch(e){}
+}
+$('sndBtn').onclick=()=>{snd=snd?0:1;$('sndBtn').textContent=snd?'Sound on':'Sound off'};
+function meow(){
+  if(!ac||!snd)return;const n=ac.currentTime,o=ac.createOscillator(),g=ac.createGain(),f=ac.createBiquadFilter();
+  o.type='sawtooth';f.type='bandpass';f.frequency.value=1400;f.Q.value=1.5;
+  o.frequency.setValueAtTime(520,n);o.frequency.linearRampToValueAtTime(880,n+.18);o.frequency.linearRampToValueAtTime(480,n+.55);
+  g.gain.setValueAtTime(0,n);g.gain.linearRampToValueAtTime(.18,n+.05);g.gain.linearRampToValueAtTime(0,n+.6);
+  o.connect(f);f.connect(g);g.connect(ac.destination);o.start(n);o.stop(n+.65);
+}
+
+/* ---------- camera + motion ---------- */
+let camOn=false,gyro=false,photoMode=false,camErr='',yaw=0,pitch=-.5,hintT;
+const eul=new THREE.Euler(),q0=new THREE.Quaternion(),q1=new THREE.Quaternion(-Math.sqrt(.5),0,0,Math.sqrt(.5)),zee=new THREE.Vector3(0,0,1);
+function ori(e){
+  if(e.alpha==null||e.beta==null)return;gyro=true;
+  const so=(screen.orientation&&screen.orientation.angle)||window.orientation||0;
+  eul.set(e.beta*DEG,e.alpha*DEG,-(e.gamma||0)*DEG,'YXZ');cam.quaternion.setFromEuler(eul);
+  cam.quaternion.multiply(q1);cam.quaternion.multiply(q0.setFromAxisAngle(zee,-so*DEG));
+}
+function say(m,ms){const h=$('hint');h.textContent=m;h.style.opacity=1;clearTimeout(hintT);hintT=setTimeout(()=>h.style.opacity=0,ms)}
+async function startCam(){
+  const md=navigator.mediaDevices;
+  if(md&&md.getUserMedia){
+    for(const v of[{facingMode:{ideal:'environment'}},true]){
+      try{const st=await md.getUserMedia({video:v,audio:false});
+        vid.srcObject=st;await vid.play();vid.style.display='block';camOn=true;camErr='';return}
+      catch(e){camErr=e.name||'error'}
+    }
+  }else camErr='unsupported';
+  camOn=false;document.body.style.background='linear-gradient(#2a1f3d 0%,#5b3a52 58%,#4a2c3c 58%,#170f1c 100%)';
+}
+function camHelp(){
+  $('retryBtn').style.display=$('photoBtn').style.display='inline-block';
+  say(camErr==='NotAllowedError'||camErr==='SecurityError'||camErr==='unsupported'?'This viewer is blocking the live camera. Open the page in your phone’s browser, or use a photo of your room instead.':'The live camera didn’t start. Try again, or use a photo of your room instead.',14000);
+}
+$('retryBtn').onclick=async()=>{
+  await startCam();
+  if(camOn){$('retryBtn').style.display=$('photoBtn').style.display='none';photoMode=false;
+    document.body.style.background='';document.documentElement.style.background='';
+    addEventListener('deviceorientation',ori);spawnFront()}
+  else camHelp();
+};
+$('photoBtn').onclick=()=>$('photo').click();
+$('photo').onchange=e=>{
+  const f=e.target.files&&e.target.files[0];if(!f)return;
+  removeEventListener('deviceorientation',ori);gyro=false;photoMode=true;yaw=0;pitch=-.35;vid.style.display='none';
+  const bgv='#000 center/cover no-repeat url('+URL.createObjectURL(f)+')';
+  document.documentElement.style.background=bgv;document.body.style.background=bgv;
+  root.visible=false;mode='place';say('Tap the floor in your photo to place Miso',6000);
+};
+
+/* ---------- input ---------- */
+const P={cx:-999,cy:-999,vx:0,vy:0,down:false,t:-99};
+let mode='idle',dsx=0,dsy=0,moved=0,touchCat=false;
+function mv(e){const n=performance.now()/1000,dt=Math.max(.008,n-P.t);
+  if(P.t>0&&n-P.t<.3){P.vx+=((e.clientX-P.cx)/dt-P.vx)*.35;P.vy+=((e.clientY-P.cy)/dt-P.vy)*.35}
+  P.cx=e.clientX;P.cy=e.clientY;P.t=n}
+cv.addEventListener('pointerdown',e=>{cv.setPointerCapture(e.pointerId);P.down=true;P.t=-99;dsx=e.clientX;dsy=e.clientY;moved=0;mv(e);audio()});
+cv.addEventListener('pointermove',e=>{
+  if(P.down){moved=Math.max(moved,Math.hypot(e.clientX-dsx,e.clientY-dsy));
+    if(!gyro&&!photoMode&&!touchCat){yaw-=(e.clientX-P.cx)*.005;pitch=cl(pitch-(e.clientY-P.cy)*.005,-1.2,1.2)}}
+  mv(e)});
+['pointerup','pointercancel'].forEach(n=>cv.addEventListener(n,e=>{
+  if(n==='pointerup'&&moved<12&&mode!=='idle'&&mode!=='scan'&&!xrOn&&!hitCat(e.clientX,e.clientY))place(e.clientX,e.clientY);
+  P.down=false;P.vx=P.vy=0}));
+const rc=new THREE.Raycaster(),nd=new THREE.Vector2(),tv=new THREE.Vector3();
+function hitCat(px,py){if(!root.visible)return false;nd.set(px/W*2-1,-(py/H)*2+1);rc.setFromCamera(nd,cam);return rc.intersectObjects([bodyBase,headBase],false).length>0}
+let spawnT=9;
+function place(px,py){
+  nd.set(px/W*2-1,-(py/H)*2+1);rc.setFromCamera(nd,cam);
+  const o=cam.position,d=rc.ray.direction.clone(),p=new THREE.Vector3();
+  if(d.y<-.06){p.copy(o).addScaledVector(d,Math.min(-o.y/d.y,3.5))}
+  else{p.set(o.x+d.x,0,o.z+d.z).sub(o).setY(0).normalize().multiplyScalar(1.8).add(o)}
+  p.y=0;const hv=new THREE.Vector3(p.x-o.x,0,p.z-o.z),L=hv.length();
+  if(L<.8||L>3.5){hv.setLength(cl(L,.8,3.5));p.set(o.x+hv.x,0,o.z+hv.z)}
+  if(!root.visible){root.position.copy(p);root.visible=true;spawnT=0;mode='pet';say('Pet her: slide your finger over her head and back',6000)}
+  else{goal.set(p.x,0,p.z);state='walk';stT=0;say('Miso is trotting over',3000)}
+}
+let state='sit',stT=0,sitFor=3;const goal=new THREE.Vector3();
+function spawnFront(){
+  cam.getWorldDirection(tv);tv.y=0;if(tv.lengthSq()<.01)tv.set(0,0,-1);tv.normalize();
+  root.position.set(cam.position.x+tv.x*1.5,0,cam.position.z+tv.z*1.5);root.visible=true;spawnT=0;mode='pet';state='sit';stT=0;sitFor=3;
+  say('Miso is in your room! Hold your phone up, find her, and wave your free hand over her to pet her',9000);
+}
+$('mvBtn').onclick=()=>{if(!root.visible)return;state='come';stT=0;meow();say('Miso is coming to you',3000)};
+$('go').onclick=async()=>{
+  const b=$('go');b.disabled=true;b.textContent='Waking Miso…';audio();
+  try{if(window.DeviceOrientationEvent&&DeviceOrientationEvent.requestPermission)await Promise.race([DeviceOrientationEvent.requestPermission(),new Promise(r=>setTimeout(r,5000))])}catch(e){}
+  addEventListener('deviceorientation',ori);
+  await Promise.race([startCam(),new Promise(r=>setTimeout(r,8000))]);
+  $('start').style.display='none';$('hud').style.display='block';$('bar').style.display='flex';mode='place';
+  spawnFront();if(!camOn)camHelp();
+};
+
+/* ---------- loop ---------- */
+let last=performance.now()/1000,t=0,happy=0,purr=0,eo=1,blink=0,blinkAt=3,earAt=4,earT=0,spawn=0,mood='',roll=0,nod=0;
+/* hand detection: moving skin-coloured pixels over the cat, compared with the rest of the frame */
+const sc=document.createElement('canvas');sc.width=64;sc.height=48;
+const sx=sc.getContext('2d',{willReadFrequently:true}),prevY=new Float32Array(3072),handEl=$('hand');
+let prevOk=false,sk=0,handSp=0,handOver=false,handHold=0;
+function scanHand(dt){
+  handHold=Math.max(0,handHold-dt);
+  if(handHold<=0){handOver=false;handSp=0;handEl.style.display='none'}
+  if(vid.readyState<2||!vid.videoWidth||(++sk&1))return;
+  sx.drawImage(vid,0,0,64,48);const d=sx.getImageData(0,0,64,48).data;
+  const vw=vid.videoWidth,vh=vid.videoHeight,k=Math.max(W/vw,H/vh),ox=(W-vw*k)/2,oy=(H-vh*k)/2;
+  tv.set(root.position.x,.25,root.position.z);const dist=Math.max(.3,tv.distanceTo(cam.position));
+  tv.project(cam);if(tv.z>1)return;
+  const cx=(tv.x+1)/2*W,cy=(1-tv.y)/2*H,rad=.34*(H/2)/(Math.tan(31*DEG)*dist);
+  let nIn=0,nOut=0,mIn=0,mOut=0,hs=0,hx=0,hy=0;
+  for(let j=0;j<48;j++)for(let i=0;i<64;i++){
+    const o=(j*64+i)*4,r_=d[o],g_=d[o+1],b_=d[o+2],Y=.299*r_+.587*g_+.114*b_,idx=j*64+i;
+    const mov=prevOk&&Math.abs(Y-prevY[idx])>22;prevY[idx]=Y;
+    const X=(i+.5)/64*vw*k+ox,Yp=(j+.5)/48*vh*k+oy;
+    if(Math.hypot(X-cx,Yp-cy)<rad){
+      nIn++;if(mov){mIn++;
+        const cb=128-.169*r_-.331*g_+.5*b_,cr=128+.5*r_-.419*g_-.081*b_;
+        if(cb>77&&cb<127&&cr>133&&cr<173){hs++;hx+=X;hy+=Yp}}
+    }else{nOut++;if(mov)mOut++}
+  }
+  prevOk=true;
+  const fi=nIn?mIn/nIn:0,fo=nOut?mOut/nOut:0;
+  if(nIn>12&&hs>=Math.max(6,nIn*.04)&&fi>fo*1.5+.02){
+    handHold=.4;handOver=true;handSp=cl(30+hs*3,30,140);
+    const hxs=hx/hs,hys=hy/hs;P.cx=hxs;P.cy=hys;P.t=performance.now()/1000;
+    handEl.style.display='block';handEl.style.left=hxs+'px';handEl.style.top=hys+'px';
+  }
+}
+/* true AR on phones that support WebXR (mostly Android Chrome): Miso is pinned to the real floor */
+let xrOn=false,hitSrc=null;
+if(navigator.xr&&navigator.xr.isSessionSupported)navigator.xr.isSessionSupported('immersive-ar').then(ok=>{if(ok)$('xrGo').style.display='inline-block'}).catch(()=>{});
+$('xrGo').onclick=async()=>{
+  audio();
+  try{
+    const s=await navigator.xr.requestSession('immersive-ar',{requiredFeatures:['hit-test'],optionalFeatures:['dom-overlay'],domOverlay:{root:document.body}});
+    R.xr.enabled=true;R.xr.setReferenceSpaceType('local');await R.xr.setSession(s);
+    hitSrc=await s.requestHitTestSource({space:await s.requestReferenceSpace('viewer')});
+    xrOn=true;gyro=true;camOn=false;mode='scan';root.visible=false;
+    $('start').style.display='none';$('hud').style.display='block';$('bar').style.display='flex';
+    say('Move your phone slowly to find the floor. Miso will appear on it.',8000);
+    s.addEventListener('end',()=>{xrOn=false;hitSrc=null;R.xr.enabled=false;say('AR ended. Refresh the page to start again.',8000)});
+  }catch(e){say('Walk-around AR isn’t available in this viewer. Use the normal camera button.',7000)}
+};
+function xrPlace(f){
+  if(!xrOn||!f||!hitSrc||mode!=='scan')return;
+  const hr=f.getHitTestResults(hitSrc);if(!hr.length)return;
+  const pose=hr[0].getPose(R.xr.getReferenceSpace());if(!pose)return;
+  const p=pose.transform.position;root.position.set(p.x,p.y,p.z);root.visible=true;spawnT=0;mode='pet';state='sit';stT=0;sitFor=3;
+  say('Miso is on your floor! Walk around her, and press Call Miso to bring her over',9000);
+}
+const ease=x=>{const c=1.70158+1;return 1+c*Math.pow(x-1,3)+1.70158*Math.pow(x-1,2)};
+function frame(time,xrFrame){
+  xrPlace(xrFrame);
+  const n=performance.now()/1000,dt=Math.min(n-last,.05);last=n;t+=dt;
+  if(!gyro)cam.rotation.set(pitch,yaw,0,'YXZ');
+  P.vx*=Math.pow(.02,dt);P.vy*=Math.pow(.02,dt);
+  const placed=root.visible,sp=Math.max(handSp,Math.hypot(P.vx,P.vy)/(Math.min(W,H)/100));
+  touchCat=false;
+  if(P.down&&placed&&mode==='pet'){nd.set(P.cx/W*2-1,-(P.cy/H)*2+1);rc.setFromCamera(nd,cam);touchCat=rc.intersectObjects([bodyBase,headBase],false).length>0}
+  if(placed&&camOn&&mode==='pet')scanHand(dt);else{handOver=false;handSp=0;handHold=0;handEl.style.display='none'}
+  if(handOver)touchCat=true;
+  const petting=touchCat&&sp>6;
+  happy=cl(happy+(petting?Math.min(sp,140)/140*dt*.4:touchCat?dt*.03:-dt*.05),0,1);
+  purr+=((happy>.3&&touchCat?1:0)-purr)*Math.min(1,dt*2);
+  if(pg)pg.gain.value=purr*.9*snd;
+  const m=happy<.12?(state==='sit'?'Waiting for pets':'Exploring your room'):happy<.4?'Leaning in':happy<.75?'Purring':'Completely melted';
+  if(m!==mood){mood=m;$('mood').textContent=m}
+  $('mf').style.width=(happy*100).toFixed(0)+'%';
+  if(placed){
+    spawnT+=dt;root.scale.setScalar(.85*Math.max(.001,ease(Math.min(spawnT/.9,1))));
+    stT+=dt;let walking=false,tgtYaw=0;
+    const cx=cam.position.x,cz=cam.position.z,dC=Math.hypot(root.position.x-cx,root.position.z-cz);
+    if(touchCat){state='sit';stT=0;sitFor=4}
+    else if(state==='sit'){
+      if(stT>sitFor&&!photoMode){
+        if(rnd()<.3){state='come';meow()}
+        else{const a=rnd()*6.283,r=1.2+rnd()*1.4;goal.set(cx+Math.sin(a)*r,0,cz+Math.cos(a)*r);state='walk'}
+        stT=0}
+    }else{
+      if(state==='come')goal.set(cx,0,cz);
+      const dx=goal.x-root.position.x,dz=goal.z-root.position.z,dd=Math.hypot(dx,dz);
+      const done=state==='come'?dC<.8:dd<.08,wasCome=state==='come';
+      if(done){state='sit';stT=0;sitFor=wasCome?7:2.5+rnd()*3;if(wasCome){meow();say('Miso wants pets!',3000)}}
+      else{const st=(wasCome?.55:.4)*dt;root.position.x+=dx/dd*st;root.position.z+=dz/dd*st;walking=true;tgtYaw=Math.atan2(dx,dz)}
+    }
+    const ang=walking?tgtYaw:Math.atan2(cam.position.x-root.position.x,cam.position.z-root.position.z);
+    let df=ang-face.rotation.y;df=Math.atan2(Math.sin(df),Math.cos(df));face.rotation.y+=df*Math.min(1,dt*(walking?5:2));
+    tv.set(root.position.x,root.position.y+.3,root.position.z).project(cam);
+    const k=Math.min(1,dt*6),pnx=P.cx/W*2-1;
+    roll+=((touchCat?cl(-(pnx-tv.x)*.5,-.3,.3):0)-roll)*k;nod+=((touchCat?happy*.18:0)-nod)*k;
+    head.rotation.z=roll;head.rotation.x=nod;
+    blinkAt-=dt;if(blinkAt<=0){blink=.16;blinkAt=2.5+rnd()*4}
+    let mul=1;if(blink>0){blink-=dt;mul=1-Math.sin((1-Math.max(blink,0)/.16)*Math.PI)}
+    eo+=((touchCat&&happy>.25?.08:happy>.5?.45:1)-eo)*Math.min(1,dt*8);
+    earAt-=dt;if(earAt<=0){earT=.3;earAt=3+rnd()*5}
+    let tw=0;if(earT>0){earT-=dt;tw=Math.sin(earT*25)*.12}
+    for(const e of ears)e.rotation.z=e.userData.sd*(.35+tw+happy*.2);
+    const near=n-P.t<3,lx=near?cl(pnx,-1,1):Math.sin(t*.4),ly=near?cl(-(P.cy/H*2-1),-1,1):Math.sin(t*.31)*.5;
+    for(const e of eyes){e.g.scale.y=Math.max(.08,eo*mul);e.pup.position.x=lx*.006;e.pup.position.y=ly*.004;e.pup.scale.x=.7+happy*.5}
+    inner.scale.y=1+Math.sin(t*1.7)*.012;inner.position.x=Math.sin(t*60)*.0008*purr;
+    inner.position.y=walking?Math.abs(Math.sin(t*9))*.035:0;inner.rotation.z=walking?Math.sin(t*9)*.06:0;
+    for(let i=0;i<segs.length;i++){segs[i].rotation.z=Math.sin(t*(1.4+purr*3)-i*.55)*(.16+purr*.1);segs[i].rotation.x=i?.13:0}
+    spawn+=dt;
+    if(touchCat&&happy>.3&&spawn>.32-happy*.12){spawn=0;
+      const s=new THREE.Sprite(new THREE.SpriteMaterial({map:hTex,transparent:true,depthWrite:false}));
+      s.position.set(root.position.x+(rnd()-.5)*.25,root.position.y+.5+rnd()*.1,root.position.z+(rnd()-.5)*.1);s.scale.setScalar(.07+rnd()*.05);scene.add(s);hearts.push(s)}
+  }
+  for(let i=hearts.length-1;i>=0;i--){const h=hearts[i];h.position.y+=.22*dt;h.material.opacity-=dt*.5;
+    if(h.material.opacity<=0){scene.remove(h);h.material.dispose();hearts.splice(i,1)}}
+  const ar=$('arrow');
+  if(placed&&$('start').style.display==='none'){
+    cam.updateMatrixWorld();tv.set(root.position.x,root.position.y+.25,root.position.z);
+    const lv=cam.worldToLocal(tv.clone()),pr=tv.clone().project(cam);
+    if(lv.z<0&&Math.abs(pr.x)<.92&&Math.abs(pr.y)<.88)ar.style.display='none';
+    else{let dx=lv.x,dy=-lv.y;if(Math.hypot(dx,dy)<.05)dx=1;const L=Math.hypot(dx,dy);dx/=L;dy/=L;
+      const sc=Math.min((W/2-40)/Math.max(Math.abs(dx),.001),(H/2-110)/Math.max(Math.abs(dy),.001));
+      ar.style.display='block';ar.style.left=(W/2+dx*sc)+'px';ar.style.top=(H/2+dy*sc)+'px';ar.style.transform='rotate('+Math.atan2(dy,dx)+'rad)'}
+  }else ar.style.display='none';
+  R.render(scene,cam);
+}
+R.setAnimationLoop(frame);
+$('go').disabled=false;$('go').textContent='Spawn Miso in my room';
+</script></body></html>
